@@ -1,0 +1,1552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IDS — Network Threat Monitor</title>
+<meta name="description" content="Multi-class network intrusion detection dashboard with real-time flow analysis and model comparison.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-matrix@2.0.1/dist/chartjs-chart-matrix.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080c10;--bg2:#0d1117;--bg3:#111820;
+  --border:#1e2a35;--border2:#263340;
+  --text:#c8d6e0;--text2:#6b8799;--text3:#3d5566;
+  --accent:#00d4ff;--ok:#639922;--warn:#BA7517;
+  --mono:'IBM Plex Mono',monospace;--display:'Barlow Condensed',sans-serif;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--mono)}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:1000;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,212,255,.012) 2px,rgba(0,212,255,.012) 4px)}
+
+/* ── layout ─────────────────────────────────────────────────────────────────── */
+.shell{display:grid;grid-template-rows:52px 1fr;grid-template-columns:240px 1fr;min-height:100vh}
+
+/* ── topbar ─────────────────────────────────────────────────────────────────── */
+.topbar{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;
+  background:var(--bg2);border-bottom:1px solid var(--border);padding:0 20px;z-index:10}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--display);font-size:20px;
+  font-weight:700;letter-spacing:.06em;color:var(--accent)}
+.shield{width:28px;height:28px;background:var(--accent);border-radius:4px;
+  display:flex;align-items:center;justify-content:center;
+  animation:shield-pulse 2.5s ease-in-out infinite}
+.shield svg{width:16px;height:16px;fill:var(--bg)}
+@keyframes shield-pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,212,255,.4)}50%{box-shadow:0 0 0 8px rgba(0,212,255,0)}}
+.status-pill{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ok);
+  background:rgba(0,201,122,.08);border:1px solid rgba(0,201,122,.2);border-radius:3px;padding:4px 10px}
+.status-dot{width:6px;height:6px;border-radius:50%;background:var(--ok);animation:blink 1.4s infinite}
+.status-pill.idle{color:var(--text2);background:rgba(107,135,153,.08);border-color:rgba(107,135,153,.2)}
+.status-pill.idle .status-dot{background:var(--text2);animation:none}
+.status-pill.err{color:#ff3b3b;background:rgba(255,59,59,.08);border-color:rgba(255,59,59,.2)}
+.status-pill.err .status-dot{background:#ff3b3b;animation:none}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.clock{font-size:12px;color:var(--text2);letter-spacing:.08em}
+
+/* ── sidebar ─────────────────────────────────────────────────────────────────── */
+.sidebar{background:var(--bg2);border-right:1px solid var(--border);
+  padding:0;display:flex;flex-direction:column;overflow-y:auto}
+.nav-section{font-size:9px;font-weight:600;color:var(--text3);letter-spacing:.12em;padding:14px 18px 5px}
+
+/* tab items */
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 18px;font-size:12px;
+  color:var(--text2);cursor:pointer;transition:all .15s;border-left:3px solid transparent;
+  user-select:none}
+.nav-item:hover{background:var(--bg3);color:var(--text)}
+.nav-item.active{background:rgba(0,212,255,.06);color:var(--accent);border-left-color:var(--accent)}
+.nav-item .tab-icon{font-size:14px;width:18px;text-align:center;flex-shrink:0}
+.nav-item .tab-label{flex:1}
+.nav-item .tab-badge{font-size:9px;background:rgba(0,212,255,.12);border:1px solid rgba(0,212,255,.2);
+  color:var(--accent);border-radius:3px;padding:1px 5px;letter-spacing:.05em}
+.nav-item.active .tab-badge{background:rgba(0,212,255,.2)}
+
+/* ── upload panel in sidebar ─────────────────────────────────────────────────── */
+.upload-panel{margin:10px 10px 6px;background:var(--bg3);border:1px solid var(--border);
+  border-radius:6px;padding:12px}
+.up-title{font-size:9px;font-weight:600;color:var(--text3);letter-spacing:.1em;margin-bottom:10px}
+.drop-zone{border:1px dashed var(--border2);border-radius:5px;padding:14px 10px;
+  text-align:center;cursor:pointer;transition:all .2s;margin-bottom:8px}
+.drop-zone:hover,.drop-zone.drag-over{border-color:var(--accent);background:rgba(0,212,255,.04)}
+.drop-zone.has-file{border-color:var(--ok);border-style:solid;background:rgba(99,153,34,.04)}
+.dz-icon{font-size:18px;margin-bottom:5px}
+.dz-label{font-size:10px;color:var(--text2);line-height:1.5}
+.dz-label strong{color:var(--text);display:block}
+#file-input,#model-input{display:none}
+.upload-btn{width:100%;padding:8px;border-radius:4px;border:none;cursor:pointer;
+  font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.05em;transition:all .2s}
+.btn-pcap{background:var(--accent);color:#080c10}
+.btn-pcap:hover{filter:brightness(1.1)}
+.btn-pcap:disabled{background:var(--bg3);color:var(--text3);border:1px solid var(--border);cursor:default}
+.btn-model{background:transparent;color:var(--text2);border:1px solid var(--border);margin-top:5px}
+.btn-model:hover{border-color:var(--border2);color:var(--text)}
+.progress-wrap{margin-top:8px;display:none}
+.progress-wrap.visible{display:block}
+.prog-label{font-size:10px;color:var(--text2);margin-bottom:4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prog-track{height:4px;background:var(--bg);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .4s ease;width:0%}
+.prog-fill.done{background:var(--ok)}
+.prog-fill.error{background:#ff3b3b}
+.model-badge{font-size:10px;color:var(--text2);background:var(--bg3);border:1px solid var(--border);
+  border-radius:4px;padding:8px 10px;margin-top:10px;line-height:1.6}
+.model-badge strong{color:var(--accent);display:block;margin-bottom:3px}
+.win-info{font-size:10px;color:var(--text3);margin-top:8px;padding:6px 8px;
+  background:var(--bg);border-radius:4px;border:1px solid var(--border);line-height:1.7}
+.win-info span{color:var(--accent)}
+.model-select-wrap{margin-top:10px}
+.model-select-label{font-size:9px;font-weight:600;color:var(--text3);
+  letter-spacing:.12em;margin-bottom:5px;display:block}
+.model-select{width:100%;background:var(--bg);color:var(--text);
+  border:1px solid var(--border);border-radius:4px;padding:6px 8px;
+  font-family:var(--mono);font-size:11px;cursor:pointer;
+  outline:none;transition:border-color .2s;appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b8799'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 8px center}
+.model-select:hover,.model-select:focus{border-color:var(--accent)}
+.model-select:disabled{opacity:.45;cursor:default}
+.model-select-none{font-size:10px;color:var(--text3);padding:4px 0;display:none}
+
+/* ── main content wrapper ─────────────────────────────────────────────────────── */
+.main{overflow-y:auto;display:flex;flex-direction:column}
+
+/* Tab panels */
+.tab-panel{display:none;flex-direction:column;gap:14px;padding:18px;flex:1}
+.tab-panel.active{display:flex}
+
+/* ══════════════════════════════════════════════
+   TAB 1 — FLOW INSPECTOR  (existing live stream)
+   ══════════════════════════════════════════════ */
+.idle-state{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:320px;gap:14px;text-align:center}
+.idle-state.hidden{display:none}
+.idle-icon{font-size:48px;opacity:.12}
+.idle-text{font-size:14px;color:var(--text2);line-height:1.7}
+.idle-text strong{color:var(--text);display:block;margin-bottom:4px}
+
+.metrics-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.metric{background:var(--bg2);border:1px solid var(--border);border-radius:6px;
+  padding:12px 14px;position:relative;overflow:hidden}
+.metric::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--border2)}
+.metric.c1::before{background:#E24B4A}.metric.c2::before{background:#D85A30}
+.metric.c3::before{background:#BA7517}.metric.c4::before{background:#378ADD}
+.metric.c5::before{background:#7F77DD}
+.metric-label{font-size:9px;font-weight:500;color:var(--text2);letter-spacing:.1em;margin-bottom:5px}
+.metric-val{font-family:var(--display);font-size:30px;font-weight:700;line-height:1;
+  color:var(--text);transition:color .3s}
+.metric.c1 .metric-val{color:#E24B4A}.metric.c2 .metric-val{color:#D85A30}
+.metric.c3 .metric-val{color:#BA7517}.metric.c4 .metric-val{color:#378ADD}
+.metric.c5 .metric-val{color:#7F77DD}
+.metric-sub{font-size:9px;color:var(--text3);margin-top:3px}
+
+.charts-row{display:grid;grid-template-columns:2fr 1fr;gap:12px}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:14px}
+.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.card-title{font-size:10px;font-weight:500;color:var(--text2);letter-spacing:.08em}
+.card-tag{font-size:9px;padding:3px 7px;border-radius:3px;
+  background:rgba(0,212,255,.08);border:1px solid rgba(0,212,255,.15);
+  color:var(--accent);letter-spacing:.06em}
+
+.bottom-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.alert-list{display:flex;flex-direction:column}
+.alert-item{display:grid;grid-template-columns:55px 1fr auto;align-items:center;
+  gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:11px;
+  animation:slide-in .3s ease}
+@keyframes slide-in{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:translateX(0)}}
+.alert-item:last-child{border-bottom:none}
+.alert-ts{color:var(--text3);font-size:10px}
+.alert-body{display:flex;flex-direction:column;gap:2px}
+.alert-src{color:var(--text);font-size:11px}
+.alert-detail{color:var(--text2);font-size:10px}
+.alert-badge{font-size:9px;font-weight:600;padding:2px 6px;border-radius:3px;
+  letter-spacing:.05em;white-space:nowrap}
+.badge-Normal{background:rgba(99,153,34,.12);color:#8bc34a;border:1px solid rgba(99,153,34,.25)}
+.badge-DDoS{background:rgba(226,75,74,.12);color:#ff6b6b;border:1px solid rgba(226,75,74,.25)}
+.badge-DDOS{background:rgba(226,75,74,.12);color:#ff6b6b;border:1px solid rgba(226,75,74,.25)}
+.badge-PortScan{background:rgba(55,138,221,.12);color:#6ab4ff;border:1px solid rgba(55,138,221,.25)}
+.badge-Fuzzer{background:rgba(127,119,221,.12);color:#b0aaf0;border:1px solid rgba(127,119,221,.25)}
+.badge-BruteForce{background:rgba(212,83,126,.12);color:#ff80b0;border:1px solid rgba(212,83,126,.25)}
+
+.flow-table-wrap{overflow-y:auto;max-height:220px}
+.flow-table-wrap::-webkit-scrollbar{width:3px}
+.flow-table-wrap::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+table{width:100%;border-collapse:collapse;font-size:10px}
+th{color:var(--text3);font-size:9px;font-weight:500;letter-spacing:.08em;text-align:left;
+  padding:0 5px 7px;border-bottom:1px solid var(--border);
+  position:sticky;top:0;background:var(--bg2);z-index:1}
+td{padding:6px 5px;color:var(--text);border-bottom:1px solid var(--border)}
+tr:hover td{background:var(--bg3)}
+tr.threat td{background:rgba(255,59,59,.04)}
+tr.threat td:first-child{border-left:2px solid #ff3b3b}
+.conf-bar-cell{display:flex;align-items:center;gap:5px}
+.conf-bar{height:4px;border-radius:2px}
+
+.feat-list{display:flex;flex-direction:column;gap:7px}
+.feat-row{display:flex;flex-direction:column;gap:3px}
+.feat-label-row{display:flex;justify-content:space-between}
+.feat-name{font-size:10px;color:var(--text2)}
+.feat-pct{font-size:10px;color:var(--accent)}
+.feat-track{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+.feat-fill{height:100%;border-radius:2px;transition:width 1s ease}
+
+.summary-card{background:rgba(99,153,34,.06);border:1px solid rgba(99,153,34,.2);
+  border-radius:6px;padding:12px 16px;display:none}
+.summary-card.visible{display:flex;gap:24px;flex-wrap:wrap;align-items:center}
+.sum-item{display:flex;flex-direction:column;gap:2px}
+.sum-label{font-size:9px;color:var(--text3);letter-spacing:.08em}
+.sum-val{font-size:18px;font-family:var(--display);font-weight:700;color:var(--ok)}
+.sum-val.red{color:#E24B4A}
+
+/* ══════════════════════════════════════════════
+   TAB 2 — OVERVIEW (features.csv stats)
+   ══════════════════════════════════════════════ */
+.page-header{margin-bottom:4px}
+.page-title{font-family:var(--display);font-size:26px;font-weight:700;letter-spacing:.04em;
+  background:linear-gradient(135deg,var(--accent),#7B68EE);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.page-sub{font-size:11px;color:var(--text3);margin-top:3px;letter-spacing:.04em}
+
+.kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.kpi-card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;
+  padding:14px 16px;text-align:center;position:relative;overflow:hidden;
+  transition:border-color .2s,transform .2s}
+.kpi-card:hover{border-color:var(--border2);transform:translateY(-2px)}
+.kpi-card::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px}
+.kpi-val{font-family:var(--display);font-size:32px;font-weight:700;line-height:1}
+.kpi-lbl{font-size:9px;color:var(--text3);letter-spacing:.1em;margin-top:4px;text-transform:uppercase}
+
+.section-header{font-size:10px;font-weight:600;color:var(--text2);letter-spacing:.1em;
+  border-bottom:1px solid var(--border);padding-bottom:8px;margin:6px 0 12px;
+  text-transform:uppercase}
+
+/* class balance cards */
+.class-balance-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.class-bal-card{padding:12px;background:rgba(255,255,255,.02);border-radius:8px;border:1px solid transparent}
+.class-bal-name{font-family:var(--display);font-size:14px;font-weight:700;margin-bottom:4px}
+.class-bal-count{font-family:var(--display);font-size:22px;font-weight:700;color:var(--text)}
+.class-bal-pct{font-size:10px;color:var(--text3);margin-top:2px}
+.class-bal-bar{height:4px;background:var(--bg3);border-radius:2px;margin-top:8px;overflow:hidden}
+.class-bal-fill{height:100%;border-radius:2px}
+
+/* stats table */
+.stats-table{width:100%;border-collapse:collapse;font-size:11px}
+.stats-table th{color:var(--text3);font-size:9px;font-weight:500;letter-spacing:.08em;
+  text-align:left;padding:0 8px 8px;border-bottom:1px solid var(--border)}
+.stats-table td{padding:7px 8px;color:var(--text);border-bottom:1px solid var(--border)}
+.stats-table tr:hover td{background:var(--bg3)}
+.stats-table .class-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
+
+/* synthetic warning */
+.synthetic-warn{background:rgba(186,117,23,.08);border:1px solid rgba(186,117,23,.25);
+  border-radius:6px;padding:10px 14px;font-size:11px;color:var(--warn);
+  display:flex;align-items:center;gap:8px}
+
+/* two-col charts */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+
+/* spinner */
+.spinner{display:inline-block;width:18px;height:18px;border:2px solid var(--border2);
+  border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-row{display:flex;align-items:center;color:var(--text2);font-size:11px;padding:24px 0}
+
+/* ══════════════════════════════════════════════
+   TAB 3 — VISUALISATIONS
+   ══════════════════════════════════════════════ */
+.viz-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+.viz-select{background:var(--bg);color:var(--text);border:1px solid var(--border);
+  border-radius:4px;padding:5px 8px;font-family:var(--mono);font-size:11px;cursor:pointer;
+  outline:none;transition:border-color .2s}
+.viz-select:hover,.viz-select:focus{border-color:var(--accent)}
+.viz-label{font-size:10px;color:var(--text2)}
+.legend-row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px}
+.legend-item{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--text2)}
+.legend-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+/* ══════════════════════════════════════════════
+   TAB 4 — MODEL COMPARISON
+   ══════════════════════════════════════════════ */
+.model-table-wrap{overflow-x:auto}
+.model-table{width:100%;border-collapse:collapse;font-size:11px;min-width:600px}
+.model-table th{color:var(--text3);font-size:9px;font-weight:500;letter-spacing:.08em;
+  text-align:left;padding:0 10px 8px;border-bottom:1px solid var(--border)}
+.model-table td{padding:8px 10px;color:var(--text);border-bottom:1px solid var(--border)}
+.model-table tr:hover td{background:var(--bg3)}
+.model-table .best{color:#4caf82;font-weight:700}
+.metric-bar-cell{display:flex;align-items:center;gap:6px}
+.metric-bar-track{flex:1;height:5px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.metric-bar-fill{height:100%;border-radius:3px;background:var(--accent);transition:width .8s ease}
+
+.model-selector-row{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.model-selector-row label{font-size:10px;color:var(--text2)}
+
+.cm-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.cm-card{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:0}
+.cm-card canvas{width:100%;display:block}
+.cm-title{font-size:10px;color:var(--text2);letter-spacing:.06em;margin-bottom:10px}
+.cm-canvas-wrap{position:relative}
+
+.report-table{width:100%;border-collapse:collapse;font-size:11px}
+.report-table th{color:var(--text3);font-size:9px;letter-spacing:.08em;text-align:left;
+  padding:0 8px 8px;border-bottom:1px solid var(--border)}
+.report-table td{padding:7px 8px;color:var(--text);border-bottom:1px solid var(--border)}
+.report-table tr:hover td{background:var(--bg3)}
+
+.placeholder-box{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:280px;gap:12px;text-align:center;color:var(--text3)}
+.placeholder-box .ph-icon{font-size:40px;opacity:.25}
+.placeholder-box .ph-text{font-size:12px;line-height:1.7}
+.placeholder-box .ph-hint{font-size:10px;color:var(--text3)}
+
+/* ══════════════════════════════════════════════
+   ATTACK ALERT MODAL
+   ══════════════════════════════════════════════ */
+.alert-overlay{position:fixed;inset:0;z-index:9000;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.65);backdrop-filter:blur(4px);
+  opacity:0;pointer-events:none;transition:opacity .25s}
+.alert-overlay.show{opacity:1;pointer-events:all}
+.alert-modal{background:#0d1117;border:1px solid #E24B4A;border-top:4px solid #E24B4A;
+  border-radius:8px;padding:28px 32px;max-width:420px;width:90%;
+  box-shadow:0 0 60px rgba(226,75,74,.25);animation:modal-in .3s cubic-bezier(.34,1.56,.64,1)}
+@keyframes modal-in{from{transform:scale(.88);opacity:0}to{transform:scale(1);opacity:1}}
+.modal-icon{font-size:36px;margin-bottom:12px;text-align:center;
+  animation:icon-pulse 1s ease-in-out infinite}
+@keyframes icon-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.15)}}
+.modal-title{font-family:var(--display);font-size:22px;font-weight:700;
+  color:#E24B4A;letter-spacing:.04em;margin-bottom:14px;text-align:center}
+.modal-body{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin-bottom:18px}
+.modal-field{display:flex;flex-direction:column;gap:3px}
+.modal-field-label{font-size:9px;color:var(--text3);letter-spacing:.1em}
+.modal-field-val{font-size:13px;color:var(--text);font-family:var(--mono)}
+.modal-footer{display:flex;gap:10px;justify-content:center}
+.modal-btn{padding:9px 22px;border-radius:5px;border:none;cursor:pointer;
+  font-family:var(--mono);font-size:12px;font-weight:500;letter-spacing:.05em;transition:all .2s}
+.btn-close-alert{background:#E24B4A;color:#fff}
+.btn-close-alert:hover{background:#c73938}
+.btn-mute{background:transparent;color:var(--text2);border:1px solid var(--border)}
+.btn-mute:hover{border-color:var(--border2);color:var(--text)}
+
+/* sound/alert controls in topbar */
+.mute-indicator{display:none;align-items:center;gap:6px;font-size:10px;
+  color:var(--text3);padding:6px 10px;border-radius:4px;
+  background:var(--bg3);border:1px solid var(--border);width:fit-content}
+.mute-indicator.visible{display:flex}
+.sound-toggle{display:flex;align-items:center;gap:6px;font-size:11px;
+  color:var(--text2);cursor:pointer;padding:5px 10px;border-radius:4px;
+  border:1px solid var(--border);background:transparent;font-family:var(--mono);transition:all .2s}
+.sound-toggle:hover{border-color:var(--border2);color:var(--text)}
+.sound-toggle.muted{color:var(--text3)}
+.alert-switch-wrap{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text2)}
+.alert-switch-wrap label{cursor:pointer;user-select:none}
+.toggle-track{position:relative;display:inline-block;width:36px;height:20px;flex-shrink:0}
+.toggle-track input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;inset:0;border-radius:20px;background:#2a3540;
+  border:1px solid var(--border);cursor:pointer;transition:background .25s}
+.toggle-slider::before{content:'';position:absolute;left:3px;top:50%;
+  transform:translateY(-50%);width:13px;height:13px;border-radius:50%;
+  background:var(--text3);transition:.25s}
+.toggle-track input:checked+.toggle-slider{background:#1a3a2a;border-color:#2d6a40}
+.toggle-track input:checked+.toggle-slider::before{background:#4caf82;left:19px}
+
+/* scrollbar global */
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+</style>
+</head>
+<body>
+
+<!-- ══ ATTACK ALERT MODAL ══════════════════════════════════════════════════ -->
+<div class="alert-overlay" id="alert-overlay">
+  <div class="alert-modal">
+    <div class="modal-icon">⚠️</div>
+    <div class="modal-title" id="modal-title">THREAT DETECTED</div>
+    <div class="modal-body">
+      <div class="modal-field"><span class="modal-field-label">ATTACK TYPE</span><span class="modal-field-val" id="modal-type">—</span></div>
+      <div class="modal-field"><span class="modal-field-label">CONFIDENCE</span><span class="modal-field-val" id="modal-conf">—</span></div>
+      <div class="modal-field"><span class="modal-field-label">SOURCE IP</span><span class="modal-field-val" id="modal-src">—</span></div>
+      <div class="modal-field"><span class="modal-field-label">DESTINATION</span><span class="modal-field-val" id="modal-dst">—</span></div>
+      <div class="modal-field"><span class="modal-field-label">DST PORT</span><span class="modal-field-val" id="modal-port">—</span></div>
+      <div class="modal-field"><span class="modal-field-label">THREATS IN WINDOW</span><span class="modal-field-val" id="modal-count">—</span></div>
+    </div>
+    <div class="modal-footer">
+      <button class="modal-btn btn-close-alert" onclick="closeAlert()">DISMISS</button>
+      <button class="modal-btn btn-mute" onclick="toggleMute()">🔔 MUTE ALERTS</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SHELL ════════════════════════════════════════════════════════════════ -->
+<div class="shell">
+
+  <!-- topbar -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="shield">
+        <svg viewBox="0 0 24 24"><path d="M12 2L3 6v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V6l-9-4z"/></svg>
+      </div>
+      NETGUARD·IDS
+    </div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <div class="mute-indicator" id="mute-indicator">🔕 Alerts muted</div>
+      <button class="sound-toggle" id="sound-toggle" onclick="toggleMute()">🔔 Alerts ON</button>
+      <div class="alert-switch-wrap">
+        <label for="alert-popup-toggle">POPUPS</label>
+        <label class="toggle-track">
+          <input type="checkbox" id="alert-popup-toggle" checked onchange="toggleAlertPopup(this)">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="status-pill idle" id="engine-status">
+        <span class="status-dot"></span>
+        <span id="status-text">WAITING FOR CSV</span>
+      </div>
+      <div class="clock" id="clock">--:--:--</div>
+    </div>
+  </header>
+
+  <!-- sidebar -->
+  <nav class="sidebar">
+    <div class="nav-section">MONITOR</div>
+
+    <div class="nav-item active" id="nav-flow" onclick="switchTab('flow')">
+      <span class="tab-icon">⚡</span>
+      <span class="tab-label">Flow Inspector</span>
+      <span class="tab-badge">LIVE</span>
+    </div>
+    <div class="nav-item" id="nav-overview" onclick="switchTab('overview')">
+      <span class="tab-icon">🏠</span>
+      <span class="tab-label">Overview</span>
+    </div>
+
+    <div class="nav-section">ANALYSIS</div>
+    <div class="nav-item" id="nav-viz" onclick="switchTab('viz')">
+      <span class="tab-icon">📊</span>
+      <span class="tab-label">Visualisations</span>
+    </div>
+    <div class="nav-item" id="nav-models" onclick="switchTab('models')">
+      <span class="tab-icon">🤖</span>
+      <span class="tab-label">Model Comparison</span>
+    </div>
+
+    <!-- Upload panel (always visible, tied to Flow Inspector) -->
+    <div class="upload-panel">
+      <div class="up-title">CSV ANALYSIS</div>
+      <div class="drop-zone" id="drop-zone">
+        <div class="dz-icon">📁</div>
+        <div class="dz-label"><strong id="dz-filename">Drop .csv here</strong>or click to browse</div>
+      </div>
+      <input type="file" id="file-input" accept=".csv">
+      <button class="upload-btn btn-pcap" id="upload-btn" disabled>▶ ANALYSE TRAFFIC</button>
+      <div class="progress-wrap" id="prog-wrap">
+        <div class="prog-label" id="prog-label">Initialising...</div>
+        <div class="prog-track"><div class="prog-fill" id="prog-fill"></div></div>
+      </div>
+      <div class="win-info" id="win-info" style="display:none">
+        Window <span id="wi-idx">—</span> &nbsp;|&nbsp;
+        <span id="wi-flows">—</span> flows &nbsp;|&nbsp;
+        <span id="wi-threats" style="color:#E24B4A">—</span> threats
+      </div>
+
+      <div class="nav-section" style="padding:12px 0 5px">ML MODEL</div>
+      <input type="file" id="model-input" accept=".pkl,.joblib">
+      <button class="upload-btn btn-model" id="model-btn">⬆ LOAD MODEL (.pkl)</button>
+      <div class="model-badge">
+        <strong id="model-name">MODEL</strong>
+        <span id="model-detail">Checking...</span>
+      </div>
+      <div class="model-select-wrap" id="model-select-wrap">
+        <span class="model-select-label">ACTIVE MODEL</span>
+        <select class="model-select" id="model-select" onchange="onModelSelect(this)">
+          <option value="">— no bundle —</option>
+        </select>
+        <span class="model-select-none" id="model-select-none">N/A — single model</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ══ MAIN CONTENT ═══════════════════════════════════════════════════════ -->
+  <main class="main">
+
+    <!-- ═══════════════════════════════════════════════
+         TAB 1: FLOW INSPECTOR (live stream)
+         ═══════════════════════════════════════════════ -->
+    <section class="tab-panel active" id="tab-flow">
+
+      <div class="idle-state" id="idle-state">
+        <div class="idle-icon">🛡</div>
+        <div class="idle-text">
+          <strong>Upload a CSV file to begin</strong>
+          The file will be analysed using sliding windows.<br>
+          Threats trigger an instant alert with sound.
+        </div>
+      </div>
+
+      <div id="dashboard" style="display:none;flex-direction:column;gap:14px">
+        <div class="summary-card" id="summary-card">
+          <div class="sum-item"><div class="sum-label">PACKETS</div><div class="sum-val" id="sum-pkts">0</div></div>
+          <div class="sum-item"><div class="sum-label">FLOWS</div><div class="sum-val" id="sum-flows">0</div></div>
+          <div class="sum-item"><div class="sum-label">WINDOWS</div><div class="sum-val" id="sum-wins">0</div></div>
+          <div class="sum-item"><div class="sum-label">THREATS</div><div class="sum-val red" id="sum-threats">0</div></div>
+          <div class="sum-item"><div class="sum-label">THREAT RATE</div><div class="sum-val red" id="sum-rate">0%</div></div>
+        </div>
+
+        <div class="metrics-row">
+          <div class="metric c4"><div class="metric-label">TOTAL FLOWS</div><div class="metric-val" id="m-flows">0</div><div class="metric-sub">extracted</div></div>
+          <div class="metric c1"><div class="metric-label">THREATS</div><div class="metric-val" id="m-threats">0</div><div class="metric-sub">detected</div></div>
+          <div class="metric c2"><div class="metric-label">PACKETS</div><div class="metric-val" id="m-pkts">0</div><div class="metric-sub">processed</div></div>
+          <div class="metric c3"><div class="metric-label">WINDOWS</div><div class="metric-val" id="m-wins">0</div><div class="metric-sub">× sliding</div></div>
+          <div class="metric c5"><div class="metric-label">THREAT RATE</div><div class="metric-val" id="m-rate">0%</div><div class="metric-sub">of all flows</div></div>
+        </div>
+
+        <div class="charts-row">
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">FLOW CLASSIFICATION — NORMAL vs THREATS (sliding window)</span>
+              <span class="card-tag" id="chart-tag">LIVE</span>
+            </div>
+            <div style="position:relative;height:185px"><canvas id="timelineChart"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">ATTACK DISTRIBUTION</span><span class="card-tag">RF</span></div>
+            <div style="position:relative;height:185px"><canvas id="donutChart"></canvas></div>
+          </div>
+        </div>
+
+        <div class="bottom-row">
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">THREAT ALERTS</span>
+              <span class="card-tag" id="alert-count">0</span>
+            </div>
+            <div class="alert-list" id="alert-list"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">CLASSIFIED FLOWS</span><span class="card-tag">STREAM</span></div>
+            <div class="flow-table-wrap">
+              <table>
+                <thead><tr><th>TIME</th><th>SRC IP</th><th>DST IP</th><th>LABEL</th><th>CONF</th></tr></thead>
+                <tbody id="flow-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title" id="feat-card-title">RF FEATURE IMPORTANCE</span><span class="card-tag">MODEL</span></div>
+            <div class="feat-list" id="feat-list"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-title">ATTACK TYPE COUNTS</span><span class="card-tag">MULTI-CLASS</span></div>
+          <div style="position:relative;height:120px"><canvas id="barChart"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════
+         TAB 2: OVERVIEW (features.csv summary)
+         ═══════════════════════════════════════════════ -->
+    <section class="tab-panel" id="tab-overview">
+      <div class="page-header">
+        <div class="page-title">Network Intrusion Detection System</div>
+        <div class="page-sub">Multi-class traffic classification · Dataset overview from features.csv</div>
+      </div>
+
+      <div id="ov-loading" class="loading-row"><span class="spinner"></span>Loading overview data…</div>
+      <div id="ov-synthetic-warn" class="synthetic-warn" style="display:none">
+        ⚠ Running on synthetic data — place <strong style="margin:0 4px">features_final.csv</strong> in the app directory to use real data.
+      </div>
+
+      <!-- KPI row -->
+      <div class="kpi-row" id="ov-kpi-row" style="display:none">
+        <div class="kpi-card" style="--kc:#4C9BE8"><div class="kpi-val" style="color:#4C9BE8" id="ov-kpi-pkts">—</div><div class="kpi-lbl">Total Packets</div></div>
+        <div class="kpi-card" style="--kc:#7B68EE"><div class="kpi-val" style="color:#7B68EE" id="ov-kpi-wins">—</div><div class="kpi-lbl">Windows</div></div>
+        <div class="kpi-card" style="--kc:#E84C4C"><div class="kpi-val" style="color:#E84C4C" id="ov-kpi-atk">—</div><div class="kpi-lbl">Attack Windows</div></div>
+        <div class="kpi-card" style="--kc:#F5A623"><div class="kpi-val" style="color:#F5A623" id="ov-kpi-pct">—</div><div class="kpi-lbl">Attack %</div></div>
+        <div class="kpi-card" style="--kc:#50C878"><div class="kpi-val" style="color:#50C878" id="ov-kpi-cls">—</div><div class="kpi-lbl">Classes Found</div></div>
+      </div>
+
+      <div id="ov-body" style="display:none;flex-direction:column;gap:14px">
+        <!-- Class Distribution Charts -->
+        <div class="section-header">Class Distribution</div>
+        <div class="two-col">
+          <div class="card">
+            <div class="card-header"><span class="card-title">CLASS DISTRIBUTION (Raw Packets)</span></div>
+            <div style="position:relative;height:220px"><canvas id="ov-raw-packets-chart"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">CLASS DISTRIBUTION (Flow features)</span></div>
+            <div style="position:relative;height:220px"><canvas id="ov-bar-chart"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Class Balance -->
+        <div class="section-header">Class Balance & Attack Breakdown</div>
+        <div class="class-balance-row" id="ov-class-balance"></div>
+
+        <!-- Feature stats table -->
+        <div class="section-header">Feature Statistics by Class</div>
+        <div class="card">
+          <div style="overflow-x:auto">
+            <table class="stats-table" id="ov-stats-table">
+              <thead>
+                <tr>
+                  <th>CLASS</th><th>COUNT</th>
+                  <th>pkt_rate (mean)</th><th>syn_ratio (mean)</th>
+                  <th>IAT_min (mean)</th><th>n_unique_dports (mean)</th><th>n_unique_src (mean)</th>
+                </tr>
+              </thead>
+              <tbody id="ov-stats-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════
+         TAB 3: VISUALISATIONS (charts & feature analysis)
+         ═══════════════════════════════════════════════ -->
+    <section class="tab-panel" id="tab-viz">
+      <div class="page-header">
+        <div class="page-title">Feature Visualisations</div>
+        <div class="page-sub">Charts and feature analysis · Distribution · Time series · Importance</div>
+      </div>
+
+      <div id="viz-loading" class="loading-row"><span class="spinner"></span>Loading visualisation data…</div>
+      <div id="viz-body" style="display:none;flex-direction:column;gap:14px">
+
+        <!-- Legend -->
+        <div class="legend-row" id="viz-legend"></div>
+
+        <!-- Distribution plots -->
+        <div class="section-header">Feature Distributions by Class</div>
+        <div class="two-col">
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">DISTRIBUTION PLOT</span>
+              <select class="viz-select" id="viz-dist-feat" onchange="renderDistChart()">
+                <option value="syn_ratio">syn_ratio</option>
+                <option value="pkt_rate">pkt_rate</option>
+                <option value="IAT_min">IAT_min</option>
+                <option value="n_unique_dports">n_unique_dports</option>
+              </select>
+            </div>
+            <div style="position:relative;height:240px"><canvas id="viz-dist-chart"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">FEATURE IMPORTANCE (MODEL)</span><span class="card-tag">TOP 15</span></div>
+            <div style="position:relative;height:240px"><canvas id="viz-fi-chart"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Time series -->
+        <div class="section-header">Time Series Analysis</div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">FEATURE OVER TIME</span>
+            <select class="viz-select" id="viz-ts-feat" onchange="renderTsChart()">
+              <option value="pkt_rate">pkt_rate</option>
+              <option value="syn_ratio">syn_ratio</option>
+            </select>
+          </div>
+          <div style="position:relative;height:200px"><canvas id="viz-ts-chart"></canvas></div>
+        </div>
+
+        <!-- Second distribution row -->
+        <div class="section-header">Additional Distributions</div>
+        <div class="two-col">
+          <div class="card">
+            <div class="card-header"><span class="card-title">pkt_rate DISTRIBUTION</span></div>
+            <div style="position:relative;height:200px"><canvas id="viz-pkt-chart"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">n_unique_dports DISTRIBUTION</span></div>
+            <div style="position:relative;height:200px"><canvas id="viz-dport-chart"></canvas></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════
+         TAB 4: MODEL COMPARISON
+         ═══════════════════════════════════════════════ -->
+    <section class="tab-panel" id="tab-models">
+      <div class="page-header">
+        <div class="page-title">Model Comparison & Evaluation</div>
+        <div class="page-sub">Model performance metrics · Confusion matrices · Per-class reports</div>
+      </div>
+
+      <div id="mc-loading" class="loading-row"><span class="spinner"></span>Loading model comparison data…</div>
+      <div id="mc-placeholder" style="display:none">
+        <div class="placeholder-box">
+          <div class="ph-icon">🤖</div>
+          <div class="ph-text">No model comparison data available.<br>Run the notebook to generate <code>results_meta</code> inside the bundle.</div>
+          <div class="ph-hint">Place <strong>ids_bundle.pkl</strong> in the <code>models/</code> directory and reload the model.</div>
+        </div>
+      </div>
+
+      <div id="mc-body" style="display:none;flex-direction:column;gap:14px">
+        <!-- Summary table -->
+        <div class="section-header">Performance Summary</div>
+        <div class="card model-table-wrap">
+          <table class="model-table" id="mc-summary-table">
+            <thead>
+              <tr>
+                <th>MODEL</th><th>ACCURACY</th><th>PRECISION</th><th>RECALL</th>
+                <th>F1-SCORE</th><th>ROC-AUC</th><th>TRAIN TIME (s)</th>
+              </tr>
+            </thead>
+            <tbody id="mc-summary-tbody"></tbody>
+          </table>
+        </div>
+
+        <!-- Metrics bar chart + radar -->
+        <div class="two-col">
+          <div class="card">
+            <div class="card-header"><span class="card-title">METRICS COMPARISON</span><span class="card-tag">BAR</span></div>
+            <div style="position:relative;height:260px"><canvas id="mc-metrics-chart"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">RADAR COMPARISON</span><span class="card-tag">MULTI-METRIC</span></div>
+            <div style="position:relative;height:260px"><canvas id="mc-radar-chart"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Confusion matrices -->
+        <div class="section-header">Confusion Matrices</div>
+        <div class="cm-grid" id="mc-cm-grid"></div>
+
+        <!-- Per-class report -->
+        <div class="section-header">Per-Class Classification Report</div>
+        <div class="card">
+          <div class="model-selector-row">
+            <label>Select Model:</label>
+            <select class="viz-select" id="mc-report-select" onchange="renderReport()"></select>
+          </div>
+          <div style="overflow-x:auto">
+            <table class="report-table" id="mc-report-table">
+              <thead><tr><th>CLASS</th><th>PRECISION</th><th>RECALL</th><th>F1-SCORE</th><th>SUPPORT</th></tr></thead>
+              <tbody id="mc-report-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div><!-- end .shell -->
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════
+//  GLOBAL CONSTANTS & STATE
+// ═══════════════════════════════════════════════════════════════════════
+const CLASS_COLORS_DEFAULT = {
+  Normal:'#639922', DDoS:'#E24B4A', 'DDoS-TCP':'#E24B4A',
+  PortScan:'#378ADD', Fuzzer:'#7F77DD', BruteForce:'#D4537E'
+};
+let ATTACK_COLORS = Object.assign({}, CLASS_COLORS_DEFAULT);
+let ATTACK_LABELS = ['DDoS','PortScan','Fuzzer','BruteForce'];
+
+let _ovData   = null;   // cached overview API response
+let _mcData   = null;   // cached model-comparison API response
+let _fiData   = null;   // feature importance from socket init
+let _distChartInst = null;
+let _tsChartInst   = null;
+let _pktChartInst  = null;
+let _dportChartInst = null;
+let _fiChartInst   = null;
+let _ovRawPktsInst = null;
+let _ovBarInst  = null;
+let _mcMetricsInst = null;
+let _mcRadarInst   = null;
+let _cmChartInsts  = {};
+
+// ── Clock ──────────────────────────────────────────────────────────────
+function tick(){document.getElementById('clock').textContent=new Date().toLocaleTimeString('en-GB',{hour12:false})}
+tick(); setInterval(tick,1000);
+
+// ── Chart.js defaults ──────────────────────────────────────────────────
+Chart.defaults.color='#6b8799';
+Chart.defaults.font.family="'IBM Plex Mono',monospace";
+Chart.defaults.font.size=10;
+Chart.defaults.borderColor='#1e2a35';
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TAB SWITCHING
+// ═══════════════════════════════════════════════════════════════════════
+const TABS = ['flow','overview','viz','models'];
+let _currentTab = 'flow';
+
+// Map tab keys to DOM ids
+const NAV_ID = {flow:'nav-flow', overview:'nav-overview', viz:'nav-viz', models:'nav-models'};
+const TAB_ID = {flow:'tab-flow', overview:'tab-overview', viz:'tab-viz', models:'tab-models'};
+
+function switchTab(name) {
+  if (!TABS.includes(name)) return;
+  _currentTab = name;
+  TABS.forEach(t => {
+    document.getElementById(NAV_ID[t]).classList.toggle('active', t===name);
+    document.getElementById(TAB_ID[t]).classList.toggle('active', t===name);
+  });
+  if (name === 'overview' && !_ovData)  loadOverviewData();
+  if (name === 'viz') {
+    if (!_ovData) loadOverviewData();
+    else { showVizBody(); renderVizCharts(); }
+  }
+  if (name === 'models' && !_mcData) loadModelCompData();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TAB 1 — FLOW INSPECTOR (live stream — unchanged logic)
+// ═══════════════════════════════════════════════════════════════════════
+
+// Timeline chart
+const tlChart = new Chart(document.getElementById('timelineChart').getContext('2d'), {
+  type:'line',
+  data:{labels:[],datasets:[
+    {label:'Normal',data:[],borderColor:'#639922',backgroundColor:'rgba(99,153,34,.07)',
+     fill:true,tension:.4,pointRadius:2,pointBackgroundColor:'#639922',borderWidth:1.5},
+    {label:'Threats',data:[],borderColor:'#E24B4A',backgroundColor:'rgba(226,75,74,.1)',
+     fill:true,tension:.4,pointRadius:2,pointBackgroundColor:'#E24B4A',borderWidth:1.5}
+  ]},
+  options:{responsive:true,maintainAspectRatio:false,animation:{duration:400},
+    plugins:{legend:{display:true,labels:{boxWidth:10,boxHeight:10,padding:12}}},
+    scales:{x:{grid:{color:'#1a2530'},ticks:{maxTicksLimit:8}},
+            y:{grid:{color:'#1a2530'},beginAtZero:true}}}
+});
+
+const donutChart = new Chart(document.getElementById('donutChart').getContext('2d'), {
+  type:'doughnut',
+  data:{labels:ATTACK_LABELS,datasets:[{
+    data:ATTACK_LABELS.map(()=>0),
+    backgroundColor:ATTACK_LABELS.map(l=>ATTACK_COLORS[l]||'#888'),
+    borderColor:'#0d1117',borderWidth:2,hoverOffset:5}]},
+  options:{responsive:true,maintainAspectRatio:false,cutout:'65%',
+    plugins:{legend:{position:'right',labels:{padding:10,boxWidth:9,boxHeight:9,font:{size:10}}}}}
+});
+
+const barChart = new Chart(document.getElementById('barChart').getContext('2d'), {
+  type:'bar',
+  data:{labels:ATTACK_LABELS,datasets:[{
+    data:ATTACK_LABELS.map(()=>0),
+    backgroundColor:ATTACK_LABELS.map(l=>(ATTACK_COLORS[l]||'#888')+'99'),
+    borderColor:ATTACK_LABELS.map(l=>ATTACK_COLORS[l]||'#888'),
+    borderWidth:1,borderRadius:3,borderSkipped:false}]},
+  options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+    scales:{x:{grid:{display:false}},y:{grid:{color:'#1a2530'},beginAtZero:true}}}
+});
+
+// Feature importance renderer
+const FEAT_COLORS=['#00d4ff','#00c97a','#b06aff','#ff8c00','#ffd633','#ff4da6',
+                   '#ff3b3b','#40c8e0','#a0ffd0','#d4aaff','#ffc080','#80e0ff',
+                   '#f0c0ff','#c0e0ff','#ffe0b0','#c0ffd0','#ffd0c0','#d0c0ff'];
+function renderFeats(data) {
+  _fiData = data;
+  const entries = Object.entries(data).sort((a,b)=>b[1]-a[1]);
+  const max = entries[0]?.[1] || 1;
+  document.getElementById('feat-list').innerHTML = entries.slice(0,12).map(([k,v],i)=>`
+    <div class="feat-row">
+      <div class="feat-label-row"><span class="feat-name">${k}</span><span class="feat-pct">${(v*100).toFixed(1)}%</span></div>
+      <div class="feat-track"><div class="feat-fill" style="width:${(v/max*100).toFixed(1)}%;background:${FEAT_COLORS[i]};"></div></div>
+    </div>`).join('');
+  // Refresh viz tab feature importance chart if already open
+  if (_currentTab === 'viz') renderFiChart();
+}
+
+// Alert feed
+let alertTotal = 0;
+function pushSideAlert(ts,src,port,type,conf,bytes) {
+  alertTotal++;
+  document.getElementById('alert-count').textContent = alertTotal;
+  const list = document.getElementById('alert-list');
+  const d = document.createElement('div'); d.className='alert-item';
+  d.innerHTML=`<span class="alert-ts">${ts}</span>
+    <div class="alert-body"><span class="alert-src">${src}:${port}</span>
+    <span class="alert-detail">${(bytes/1024).toFixed(1)} KB · ${Math.round(conf*100)}%</span></div>
+    <span class="alert-badge badge-${type.replace(/[^a-zA-Z0-9]/g,'')}">${type}</span>`;
+  list.prepend(d);
+  if(list.children.length>10)list.removeChild(list.lastChild);
+}
+
+// Flow table
+function addFlowRow(f) {
+  const tbody = document.getElementById('flow-tbody');
+  const tr = document.createElement('tr'); tr.className=f.is_threat?'threat':'';
+  const col = f.is_threat?(ATTACK_COLORS[f.prediction]||'#ff3b3b'):'#639922';
+  const w = Math.round(f.confidence*55);
+  tr.innerHTML=`<td>${f.ts}</td><td>${f.src_ip}</td><td>${f.dst_port}</td>
+    <td><span class="alert-badge badge-${f.prediction.replace(/[^a-zA-Z0-9]/g,'')}" style="font-size:9px">${f.prediction}</span></td>
+    <td><div class="conf-bar-cell"><div class="conf-bar" style="width:${w}px;background:${col};"></div>
+    <span style="font-size:9px;color:${col}">${Math.round(f.confidence*100)}%</span></div></td>`;
+  tbody.prepend(tr);
+  if(tbody.children.length>10)tbody.removeChild(tbody.lastChild);
+}
+
+// Status helpers
+function setStatus(text,cls) {
+  const pill=document.getElementById('engine-status');
+  pill.className='status-pill '+(cls||'');
+  document.getElementById('status-text').textContent=text;
+}
+function setProgress(pct,label,state) {
+  document.getElementById('prog-wrap').className='progress-wrap visible';
+  const fill=document.getElementById('prog-fill');
+  fill.style.width=pct+'%';
+  fill.className='prog-fill'+(state?' '+state:'');
+  document.getElementById('prog-label').textContent=label;
+}
+function showDashboard() {
+  document.getElementById('idle-state').classList.add('hidden');
+  const d=document.getElementById('dashboard');
+  d.style.display='flex';
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SOUND & ALERT SYSTEM
+// ═══════════════════════════════════════════════════════════════════════
+let audioCtx=null, soundMuted=false, modalOpen=false, pendingAlerts=[];
+function getAudioCtx(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();return audioCtx;}
+function playWarningSound(){
+  if(soundMuted)return;
+  try{
+    const ctx=getAudioCtx();
+    [[880,0],[1200,.15],[880,.3],[1200,.45]].forEach(([freq,when])=>{
+      const osc=ctx.createOscillator(),gain=ctx.createGain();
+      osc.connect(gain);gain.connect(ctx.destination);
+      osc.type='sine';osc.frequency.setValueAtTime(freq,ctx.currentTime+when);
+      gain.gain.setValueAtTime(0,ctx.currentTime+when);
+      gain.gain.linearRampToValueAtTime(.35,ctx.currentTime+when+.02);
+      gain.gain.linearRampToValueAtTime(0,ctx.currentTime+when+.13);
+      osc.start(ctx.currentTime+when);osc.stop(ctx.currentTime+when+.14);
+    });
+  }catch(e){console.warn('Audio:',e)}
+}
+let alertsEnabled=true;
+function toggleAlertPopup(el){alertsEnabled=el.checked;if(!alertsEnabled){pendingAlerts.length=0;closeAlert();}}
+function toggleMute(){
+  soundMuted=!soundMuted;
+  document.getElementById('sound-toggle').textContent=soundMuted?'🔕 Alerts OFF':'🔔 Alerts ON';
+  document.getElementById('sound-toggle').classList.toggle('muted',soundMuted);
+  document.getElementById('mute-indicator').classList.toggle('visible',soundMuted);
+  document.querySelectorAll('.btn-mute').forEach(b=>b.textContent=soundMuted?'🔔 UNMUTE':'🔔 MUTE ALERTS');
+}
+function showAlert(data){
+  document.getElementById('modal-title').textContent='⚠ '+data.type.toUpperCase()+' ATTACK DETECTED';
+  document.getElementById('modal-type').textContent=data.type;
+  document.getElementById('modal-conf').textContent=Math.round(data.confidence*100)+'%';
+  document.getElementById('modal-src').textContent=data.src_ip||'—';
+  document.getElementById('modal-dst').textContent=(data.dst_ip||'—')+':'+data.dst_port;
+  document.getElementById('modal-port').textContent=data.dst_port||'—';
+  document.getElementById('modal-count').textContent=data.count||'1';
+  document.getElementById('alert-overlay').classList.add('show');
+  modalOpen=true; playWarningSound();
+}
+function closeAlert(){
+  document.getElementById('alert-overlay').classList.remove('show');
+  modalOpen=false;
+  if(pendingAlerts.length>0){const next=pendingAlerts.shift();setTimeout(()=>showAlert(next),400);}
+}
+document.getElementById('alert-overlay').addEventListener('click',e=>{if(e.target===e.currentTarget)closeAlert();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modalOpen)closeAlert();});
+
+// ═══════════════════════════════════════════════════════════════════════
+//  MODEL SELECTOR
+// ═══════════════════════════════════════════════════════════════════════
+let _lastModelName=null;
+async function fetchBundleModels(){
+  try{
+    const res=await fetch('/api/bundle-models');const data=await res.json();
+    const sel=document.getElementById('model-select'),none=document.getElementById('model-select-none');
+    if(data.is_bundle&&data.models.length){
+      sel.innerHTML=data.models.map(m=>`<option value="${m}"${m===data.active_model?' selected':''}>${m}</option>`).join('');
+      sel.style.display='block';none.style.display='none';_lastModelName=data.active_model;
+    }else{sel.style.display='none';none.style.display='block';}
+  }catch(e){console.warn('bundle-models:',e);}
+}
+async function onModelSelect(sel){
+  const name=sel.value; sel.disabled=true;
+  try{
+    const res=await fetch('/api/select-model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:name})});
+    const data=await res.json();
+    if(res.ok&&data.status==='ok'){
+      _lastModelName=name;
+      document.getElementById('model-name').textContent=name;
+      const badge=document.getElementById('model-name').closest('.model-badge');
+      badge.style.borderColor='var(--accent)';badge.style.transition='border-color .05s';
+      setTimeout(()=>{badge.style.borderColor='';badge.style.transition='';},800);
+      // Re-fetch feature importance for the newly selected model
+      try{
+        const fiRes=await fetch('/api/feature-importance');
+        const fiData=await fiRes.json();
+        if(fiData && Object.keys(fiData).length) renderFeats(fiData);
+        document.getElementById('feat-card-title').textContent=name.toUpperCase()+' FEATURE IMPORTANCE';
+      }catch(fiErr){console.warn('feature-importance refresh:',fiErr);}
+    }else{
+      for(const opt of sel.options)opt.selected=(opt.value===_lastModelName);
+      document.getElementById('prog-label').textContent='Model switch failed: '+(data.error||res.status);
+      document.getElementById('prog-wrap').className='progress-wrap visible';
+    }
+  }catch(e){for(const opt of sel.options)opt.selected=(opt.value===_lastModelName);}
+  finally{sel.disabled=false;}
+}
+function setModelSelectorDisabled(v){document.getElementById('model-select').disabled=v;}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SOCKET.IO
+// ═══════════════════════════════════════════════════════════════════════
+const socket=io();
+socket.on('connect',()=>console.log('[WS] connected'));
+
+socket.on('init',data=>{
+  if(data.feature_importance)renderFeats(data.feature_importance);
+  const name=document.getElementById('model-name'),detail=document.getElementById('model-detail');
+  if(data.model_loaded){name.textContent='MODEL LOADED';detail.textContent='Ready';}
+  else{name.textContent='FALLBACK RF';detail.textContent='Place ids_bundle.pkl in models/';}
+  if(data.attack_colors)Object.assign(ATTACK_COLORS,data.attack_colors);
+  if(data.label_map){
+    const labels=Object.values(data.label_map);
+    if(labels.length){
+      ATTACK_LABELS=labels;
+      donutChart.data.labels=labels;donutChart.data.datasets[0].data=labels.map(()=>0);
+      donutChart.data.datasets[0].backgroundColor=labels.map(l=>ATTACK_COLORS[l]||'#888');donutChart.update('none');
+      barChart.data.labels=labels;barChart.data.datasets[0].data=labels.map(()=>0);
+      barChart.data.datasets[0].backgroundColor=labels.map(l=>(ATTACK_COLORS[l]||'#888')+'99');
+      barChart.data.datasets[0].borderColor=labels.map(l=>ATTACK_COLORS[l]||'#888');barChart.update('none');
+    }
+  }
+  fetchBundleModels();
+});
+
+socket.on('pcap_status',d=>{
+  setProgress(d.progress||0,d.message||'',d.status==='error'?'error':d.status==='done'?'done':'');
+  if(d.status==='processing'){setStatus('ANALYSING...','');setModelSelectorDisabled(true);}
+  if(d.status==='done'){
+    setStatus('COMPLETE','');setModelSelectorDisabled(false);
+    document.getElementById('chart-tag').textContent='DONE';
+    uploadBtn.disabled=false;uploadBtn.textContent='▶ ANALYSE AGAIN';
+    if(d.summary){
+      const s=d.summary;const flows=s.total_flows||0,threats=s.total_threats||0;
+      document.getElementById('sum-pkts').textContent=(s.total_packets||0).toLocaleString();
+      document.getElementById('sum-flows').textContent=flows.toLocaleString();
+      document.getElementById('sum-wins').textContent=(s.windows||0).toString();
+      document.getElementById('sum-threats').textContent=threats.toLocaleString();
+      document.getElementById('sum-rate').textContent=flows?(Math.round(threats/flows*100)+'%'):'0%';
+      document.getElementById('summary-card').className='summary-card visible';
+    }
+  }
+  if(d.status==='error'){setStatus('ERROR','err');setModelSelectorDisabled(false);uploadBtn.disabled=false;uploadBtn.textContent='▶ RETRY';}
+});
+
+socket.on('flow',f=>{showDashboard();addFlowRow(f);if(f.is_threat)pushSideAlert(f.ts,f.src_ip,f.dst_port,f.prediction,f.confidence,f.bytes||0);});
+
+socket.on('attack_alert',data=>{
+  if(!alertsEnabled)return;
+  if(modalOpen)pendingAlerts.push(data);
+  else showAlert(data);
+});
+
+socket.on('metrics',d=>{
+  showDashboard();
+  document.getElementById('m-flows').textContent=(d.total_flows||0).toLocaleString();
+  document.getElementById('m-threats').textContent=(d.total_threats||0).toLocaleString();
+  document.getElementById('m-pkts').textContent=(d.total_packets||0).toLocaleString();
+  document.getElementById('m-wins').textContent=(d.windows_done||0).toString();
+  const flows=d.total_flows||1,threats=d.total_threats||0;
+  document.getElementById('m-rate').textContent=Math.round(threats/flows*100)+'%';
+  if(d.windows_done){
+    const wi=document.getElementById('win-info');wi.style.display='block';
+    document.getElementById('wi-idx').textContent=d.windows_done;
+    document.getElementById('wi-flows').textContent=(d.total_flows||0).toLocaleString();
+    document.getElementById('wi-threats').textContent=(d.total_threats||0).toLocaleString();
+  }
+  if(d.timeline){
+    tlChart.data.labels=d.timeline.labels;
+    tlChart.data.datasets[0].data=d.timeline.normal;
+    tlChart.data.datasets[1].data=d.timeline.threats;
+    tlChart.update('none');
+  }
+  if(d.attack_counts){
+    const vals=ATTACK_LABELS.map(l=>d.attack_counts[l]||0);
+    donutChart.data.datasets[0].data=vals;donutChart.update('none');
+    barChart.data.datasets[0].data=vals;barChart.update('none');
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+//  UPLOAD UI
+// ═══════════════════════════════════════════════════════════════════════
+let selectedFile=null;
+const dropZone=document.getElementById('drop-zone');
+const fileInput=document.getElementById('file-input');
+const uploadBtn=document.getElementById('upload-btn');
+
+dropZone.addEventListener('click',()=>fileInput.click());
+fileInput.addEventListener('change',e=>{if(e.target.files[0])setFile(e.target.files[0]);});
+dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('drag-over');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('drag-over');if(e.dataTransfer.files[0])setFile(e.dataTransfer.files[0]);});
+function setFile(f){selectedFile=f;document.getElementById('dz-filename').textContent=f.name;dropZone.classList.add('has-file');uploadBtn.disabled=false;uploadBtn.textContent='▶ ANALYSE '+f.name.toUpperCase().slice(0,20);}
+
+uploadBtn.addEventListener('click',async()=>{
+  if(!selectedFile)return;
+  // Auto-switch to flow inspector tab
+  switchTab('flow');
+  uploadBtn.disabled=true;uploadBtn.textContent='⏳ UPLOADING...';
+  setStatus('UPLOADING...','');setProgress(2,'Uploading CSV to server...');
+  document.getElementById('flow-tbody').innerHTML='';document.getElementById('alert-list').innerHTML='';
+  alertTotal=0;document.getElementById('alert-count').textContent='0';
+  document.getElementById('summary-card').className='summary-card';
+  document.getElementById('win-info').style.display='none';
+  ['m-flows','m-threats','m-pkts','m-wins'].forEach(id=>document.getElementById(id).textContent='0');
+  document.getElementById('m-rate').textContent='0%';
+  tlChart.data.labels=[];tlChart.data.datasets.forEach(d=>d.data=[]);tlChart.update('none');
+  donutChart.data.datasets[0].data=ATTACK_LABELS.map(()=>0);donutChart.update('none');
+  barChart.data.datasets[0].data=ATTACK_LABELS.map(()=>0);barChart.update('none');
+  pendingAlerts=[];
+
+  const fd=new FormData();fd.append('file',selectedFile,selectedFile.name);
+  await new Promise(resolve=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST','/api/upload-csv');
+    xhr.setRequestHeader('X-Filename',selectedFile.name);
+    xhr.upload.addEventListener('progress',e=>{
+      if(e.lengthComputable){const pct=Math.round(e.loaded/e.total*30);setProgress(pct,`Uploading... ${Math.round(e.loaded/1048576)} MB / ${Math.round(e.total/1048576)} MB`);}
+    });
+    xhr.addEventListener('load',()=>{
+      try{
+        const j=JSON.parse(xhr.responseText);
+        if(j.error){setStatus('ERROR','err');setProgress(100,'✖ '+j.error,'error');uploadBtn.disabled=false;uploadBtn.textContent='▶ RETRY';}
+        else{setProgress(32,'Accepted — processing windows...');uploadBtn.textContent='⏳ ANALYSING...';}
+      }catch{setStatus('ERROR','err');setProgress(100,'✖ Server error ('+xhr.status+')','error');uploadBtn.disabled=false;uploadBtn.textContent='▶ RETRY';}
+      resolve();
+    });
+    xhr.addEventListener('error',()=>{setStatus('ERROR','err');setProgress(100,'✖ Network error','error');uploadBtn.disabled=false;uploadBtn.textContent='▶ RETRY';resolve();});
+    xhr.send(fd);
+  });
+});
+
+// Model upload
+const modelInput=document.getElementById('model-input');
+document.getElementById('model-btn').addEventListener('click',()=>modelInput.click());
+modelInput.addEventListener('change',async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const fd=new FormData();fd.append('file',f);
+  document.getElementById('model-name').textContent='LOADING...';
+  document.getElementById('model-detail').textContent=f.name;
+  const r=await fetch('/api/load-model',{method:'POST',body:fd});
+  const j=await r.json();
+  document.getElementById('model-name').textContent=j.status==='loaded'?'MODEL LOADED':'LOAD FAILED';
+  document.getElementById('model-detail').textContent=j.status==='loaded'?(f.name+' — '+Object.values(j.labels||{}).join(', ')):(j.error||'Unknown error');
+  if(j.feature_importance)renderFeats(j.feature_importance);
+  if(j.labels){
+    const labels=Object.values(j.labels).filter(l=>l!=='Normal');
+    if(labels.length){
+      ATTACK_LABELS=labels;
+      donutChart.data.labels=labels;donutChart.data.datasets[0].data=labels.map(()=>0);
+      donutChart.data.datasets[0].backgroundColor=labels.map(l=>ATTACK_COLORS[l]||'#888');donutChart.update('none');
+      barChart.data.labels=labels;barChart.data.datasets[0].data=labels.map(()=>0);
+      barChart.data.datasets[0].backgroundColor=labels.map(l=>(ATTACK_COLORS[l]||'#888')+'99');
+      barChart.data.datasets[0].borderColor=labels.map(l=>ATTACK_COLORS[l]||'#888');barChart.update('none');
+    }
+  }
+  if(j.is_bundle){await fetchBundleModels();if(j.active_model)document.getElementById('model-name').textContent=j.active_model;}
+  else{document.getElementById('model-select').style.display='none';document.getElementById('model-select-none').style.display='block';}
+  // Invalidate cached model comparison so it reloads next time
+  _mcData=null;
+  if(_currentTab==='models')loadModelCompData();
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TAB 2 & 3 — OVERVIEW & VISUALISATIONS  (features-summary API)
+// ═══════════════════════════════════════════════════════════════════════
+async function loadOverviewData() {
+  document.getElementById('ov-loading').style.display='flex';
+  document.getElementById('viz-loading').style.display='flex';
+  try {
+    const res = await fetch('/api/features-summary');
+    _ovData = await res.json();
+    renderOverview();
+    if (_currentTab === 'viz') { showVizBody(); renderVizCharts(); }
+  } catch(e) {
+    document.getElementById('ov-loading').innerHTML='<span style="color:#ff3b3b">⚠ Failed to load overview data.</span>';
+    document.getElementById('viz-loading').innerHTML='<span style="color:#ff3b3b">⚠ Failed to load visualisation data.</span>';
+  }
+}
+
+function renderOverview() {
+  if (!_ovData) return;
+  const d = _ovData;
+
+  document.getElementById('ov-loading').style.display='none';
+  if (d.synthetic) document.getElementById('ov-synthetic-warn').style.display='flex';
+
+  // KPI
+  document.getElementById('ov-kpi-pkts').textContent = (d.kpi.total_packets||0).toLocaleString();
+  document.getElementById('ov-kpi-wins').textContent = (d.kpi.total_windows||0).toLocaleString();
+  document.getElementById('ov-kpi-atk').textContent  = (d.kpi.attack_windows||0).toLocaleString();
+  document.getElementById('ov-kpi-pct').textContent  = (d.kpi.attack_pct||0)+'%';
+  document.getElementById('ov-kpi-cls').textContent  = d.kpi.n_classes||0;
+  document.getElementById('ov-kpi-row').style.display='grid';
+  document.getElementById('ov-body').style.display='flex';
+
+  // Raw Packets Bar chart
+  const classDist = d.class_dist || {};
+  const clsNames = Object.keys(classDist);
+  const clsCounts = clsNames.map(n=>classDist[n].count);
+  const clsColors = clsNames.map(n=>classDist[n].color);
+
+  const rawPacketsMap = {
+    'Normal': 6990764,
+    'DDoS': 6285954,
+    'PortScan': 299932,
+    'Fuzzer': 1008163,
+    'BruteForce': 151596
+  };
+  const rawPacketCounts = clsNames.map(n => rawPacketsMap[n] || 0);
+
+  if (_ovRawPktsInst) _ovRawPktsInst.destroy();
+  _ovRawPktsInst = new Chart(document.getElementById('ov-raw-packets-chart').getContext('2d'), {
+    type:'bar',
+    data:{labels:clsNames,datasets:[{data:rawPacketCounts,backgroundColor:clsColors.map(c=>c+'cc'),borderColor:clsColors,borderWidth:1,borderRadius:4}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+      scales:{x:{grid:{display:false}},y:{grid:{color:'#1a2530'},beginAtZero:true}}}
+  });
+
+  // Bar chart
+  if (_ovBarInst) _ovBarInst.destroy();
+  _ovBarInst = new Chart(document.getElementById('ov-bar-chart').getContext('2d'), {
+    type:'bar',
+    data:{labels:clsNames,datasets:[{data:clsCounts,backgroundColor:clsColors.map(c=>c+'cc'),borderColor:clsColors,borderWidth:1,borderRadius:4}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+      scales:{x:{grid:{display:false}},y:{grid:{color:'#1a2530'},beginAtZero:true}}}
+  });
+
+  // Class balance cards
+  const balRow = document.getElementById('ov-class-balance');
+  balRow.innerHTML = clsNames.map(name=>{
+    const info = classDist[name];
+    const barW = Math.min(info.pct * 3, 100).toFixed(0);
+    return `<div class="class-bal-card" style="border-color:${info.color}33">
+      <div class="class-bal-name" style="color:${info.color}">${name}</div>
+      <div class="class-bal-count">${info.count.toLocaleString()}</div>
+      <div class="class-bal-pct">${info.pct}% of windows</div>
+      <div class="class-bal-bar"><div class="class-bal-fill" style="width:${barW}%;background:${info.color}"></div></div>
+    </div>`;
+  }).join('');
+
+  // Stats table
+  const tbody = document.getElementById('ov-stats-tbody');
+  tbody.innerHTML = (d.stat_rows||[]).map(row=>`
+    <tr>
+      <td><span class="class-dot" style="background:${row.color}"></span>${row.class}</td>
+      <td>${row.count.toLocaleString()}</td>
+      <td>${(row.pkt_rate||0).toFixed(3)}</td>
+      <td>${(row.syn_ratio||0).toFixed(4)}</td>
+      <td>${(row.IAT_min||0).toFixed(6)}</td>
+      <td>${(row.n_unique_dports||0).toFixed(1)}</td>
+      <td>${(row.n_unique_src||0).toFixed(1)}</td>
+    </tr>`).join('');
+
+  // If viz tab is already open, render it too
+  if (_currentTab === 'viz') { showVizBody(); renderVizCharts(); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TAB 3 — VISUALISATIONS
+// ═══════════════════════════════════════════════════════════════════════
+function showVizBody() {
+  document.getElementById('viz-loading').style.display='none';
+  document.getElementById('viz-body').style.display='flex';
+  // Build legend
+  if (!_ovData) return;
+  const dist = _ovData.class_dist || {};
+  document.getElementById('viz-legend').innerHTML = Object.entries(dist).map(([name,info])=>
+    `<div class="legend-item"><div class="legend-dot" style="background:${info.color}"></div>${name}</div>`
+  ).join('');
+}
+
+function renderVizCharts() {
+  renderDistChart();
+  renderFiChart();
+  renderTsChart();
+  renderStaticDistCharts();
+}
+
+function getDistData(feat) {
+  if (!_ovData || !_ovData.dist_data) return null;
+  return _ovData.dist_data[feat] || null;
+}
+
+function buildHistDatasets(distObj) {
+  if (!distObj) return {datasets:[], labels:[]};
+  const classes = Object.keys(distObj);
+  if (!classes.length) return {datasets:[], labels:[]};
+  const refEdges = distObj[classes[0]].edges;
+  const labels = refEdges.slice(0,-1).map((v,i)=>((v+refEdges[i+1])/2).toFixed(3));
+  const datasets = classes.map(cls => ({
+    label: cls,
+    data: distObj[cls].hist,
+    backgroundColor: (distObj[cls].color||'#888')+'88',
+    borderColor: distObj[cls].color||'#888',
+    borderWidth:1, barPercentage:1, categoryPercentage:1,
+  }));
+  return {labels, datasets};
+}
+
+function renderDistChart() {
+  const feat = document.getElementById('viz-dist-feat').value;
+  const distObj = getDistData(feat);
+  const {labels, datasets} = buildHistDatasets(distObj);
+  if (_distChartInst) _distChartInst.destroy();
+  _distChartInst = new Chart(document.getElementById('viz-dist-chart').getContext('2d'), {
+    type:'bar',
+    data:{labels, datasets},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{boxWidth:9,boxHeight:9,padding:10,color:'#6b8799'}}},
+      scales:{x:{stacked:false,grid:{display:false},ticks:{maxTicksLimit:8}},
+              y:{stacked:false,grid:{color:'#1a2530'},beginAtZero:true}}}
+  });
+}
+
+function renderFiChart() {
+  if (!_fiData) return;
+  const entries = Object.entries(_fiData).sort((a,b)=>b[1]-a[1]).slice(0,15);
+  const labels = entries.map(([k])=>k);
+  const vals = entries.map(([,v])=>parseFloat((v*100).toFixed(2)));
+  if (_fiChartInst) _fiChartInst.destroy();
+  _fiChartInst = new Chart(document.getElementById('viz-fi-chart').getContext('2d'), {
+    type:'bar',
+    data:{labels,datasets:[{data:vals,backgroundColor:FEAT_COLORS.slice(0,labels.length),borderWidth:0,borderRadius:3}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{x:{grid:{color:'#1a2530'},beginAtZero:true,title:{display:true,text:'Importance %',color:'#6b8799'}},
+              y:{grid:{display:false}}}}
+  });
+}
+
+function renderTsChart() {
+  if (!_ovData || !_ovData.ts_data || !_ovData.ts_data.length) return;
+  const feat = document.getElementById('viz-ts-feat').value;
+  const classDist = _ovData.class_dist || {};
+  // Group by class
+  const classGroups = {};
+  _ovData.ts_data.forEach(pt => {
+    if (!classGroups[pt.label]) classGroups[pt.label]=[];
+    classGroups[pt.label].push({x:pt.t, y:pt[feat]||0});
+  });
+  const datasets = Object.entries(classGroups).map(([cls,pts])=>({
+    label:cls,
+    data:pts,
+    backgroundColor:(classDist[cls]?.color||'#888')+'aa',
+    borderColor:classDist[cls]?.color||'#888',
+    pointRadius:3,showLine:false,
+  }));
+  if (_tsChartInst) _tsChartInst.destroy();
+  _tsChartInst = new Chart(document.getElementById('viz-ts-chart').getContext('2d'), {
+    type:'scatter',
+    data:{datasets},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{boxWidth:9,boxHeight:9,padding:10,color:'#6b8799'}}},
+      scales:{x:{grid:{color:'#1a2530'},title:{display:true,text:'Time (s)',color:'#6b8799'}},
+              y:{grid:{color:'#1a2530'},title:{display:true,text:feat,color:'#6b8799'},beginAtZero:true}}}
+  });
+}
+
+function renderStaticDistCharts() {
+  // pkt_rate
+  const {labels:l1, datasets:d1} = buildHistDatasets(getDistData('pkt_rate'));
+  if (_pktChartInst) _pktChartInst.destroy();
+  _pktChartInst = new Chart(document.getElementById('viz-pkt-chart').getContext('2d'), {
+    type:'bar', data:{labels:l1,datasets:d1},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{boxWidth:9,boxHeight:9,padding:8,color:'#6b8799'}}},
+      scales:{x:{stacked:false,grid:{display:false},ticks:{maxTicksLimit:6}},y:{stacked:false,grid:{color:'#1a2530'},beginAtZero:true}}}
+  });
+  // n_unique_dports
+  const {labels:l2, datasets:d2} = buildHistDatasets(getDistData('n_unique_dports'));
+  if (_dportChartInst) _dportChartInst.destroy();
+  _dportChartInst = new Chart(document.getElementById('viz-dport-chart').getContext('2d'), {
+    type:'bar', data:{labels:l2,datasets:d2},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{boxWidth:9,boxHeight:9,padding:8,color:'#6b8799'}}},
+      scales:{x:{stacked:false,grid:{display:false},ticks:{maxTicksLimit:6}},y:{stacked:false,grid:{color:'#1a2530'},beginAtZero:true}}}
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TAB 4 — MODEL COMPARISON
+// ═══════════════════════════════════════════════════════════════════════
+async function loadModelCompData() {
+  document.getElementById('mc-loading').style.display='flex';
+  document.getElementById('mc-placeholder').style.display='none';
+  document.getElementById('mc-body').style.display='none';
+  try {
+    const res = await fetch('/api/model-comparison');
+    _mcData = await res.json();
+    renderModelComparison();
+  } catch(e) {
+    document.getElementById('mc-loading').innerHTML='<span style="color:#ff3b3b">⚠ Failed to load model data.</span>';
+  }
+}
+
+function renderModelComparison() {
+  document.getElementById('mc-loading').style.display='none';
+  if (!_mcData || !_mcData.available || !_mcData.models || !_mcData.models.length) {
+    document.getElementById('mc-placeholder').style.display='flex';
+    return;
+  }
+  document.getElementById('mc-body').style.display='flex';
+  const models = _mcData.models;
+
+  // Find best values for highlighting
+  const bestF1 = Math.max(...models.map(m=>m.f1||0));
+  const bestAcc = Math.max(...models.map(m=>m.accuracy||0));
+
+  // Summary table
+  const tbody = document.getElementById('mc-summary-tbody');
+  tbody.innerHTML = models.map(m=>{
+    const isBestF1 = m.f1 && Math.abs(m.f1-bestF1)<0.0001;
+    const fmt = v => v!=null ? (typeof v==='number'?v.toFixed(4):''+v) : '—';
+    return `<tr>
+      <td>${m.model}</td>
+      <td><div class="metric-bar-cell"><div class="metric-bar-track"><div class="metric-bar-fill" style="width:${((m.accuracy||0)*100).toFixed(0)}%"></div></div><span style="font-size:10px;min-width:42px">${fmt(m.accuracy)}</span></div></td>
+      <td>${fmt(m.precision)}</td>
+      <td>${fmt(m.recall)}</td>
+      <td class="${isBestF1?'best':''}">${fmt(m.f1)}</td>
+      <td>${fmt(m.roc_auc)}</td>
+      <td>${fmt(m.train_time)}</td>
+    </tr>`;
+  }).join('');
+
+  // Metrics bar chart
+  const metrics = ['accuracy','precision','recall','f1'];
+  const metricColors = ['#00d4ff','#7B68EE','#4caf82','#F5A623'];
+  const metricDatasets = metrics.map((met,i)=>({
+    label: met.charAt(0).toUpperCase()+met.slice(1),
+    data: models.map(m=>m[met]||0),
+    backgroundColor: metricColors[i]+'99',
+    borderColor: metricColors[i],
+    borderWidth:1, borderRadius:3,
+  }));
+  if (_mcMetricsInst) _mcMetricsInst.destroy();
+  _mcMetricsInst = new Chart(document.getElementById('mc-metrics-chart').getContext('2d'), {
+    type:'bar',
+    data:{labels:models.map(m=>m.model), datasets:metricDatasets},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{boxWidth:9,boxHeight:9,padding:10,color:'#6b8799'}}},
+      scales:{x:{grid:{display:false},ticks:{maxRotation:20}},
+              y:{grid:{color:'#1a2530'},beginAtZero:true,max:1.05}}}
+  });
+
+  // Radar chart
+  const radarMets = ['accuracy','precision','recall','f1'];
+  const RADAR_COLORS=['#00d4ff','#7B68EE','#4caf82','#F5A623','#ff4da6','#ff8c00'];
+  const radarDatasets = models.map((m,i)=>({
+    label:m.model,
+    data:[...radarMets.map(rm=>m[rm]||0), m.accuracy||0],
+    borderColor:RADAR_COLORS[i%RADAR_COLORS.length],
+    backgroundColor:RADAR_COLORS[i%RADAR_COLORS.length]+'22',
+    pointBackgroundColor:RADAR_COLORS[i%RADAR_COLORS.length],
+    fill:true, pointRadius:3,
+  }));
+  if (_mcRadarInst) _mcRadarInst.destroy();
+  _mcRadarInst = new Chart(document.getElementById('mc-radar-chart').getContext('2d'), {
+    type:'radar',
+    data:{labels:[...radarMets.map(r=>r.charAt(0).toUpperCase()+r.slice(1)),'Accuracy'],datasets:radarDatasets},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{boxWidth:9,boxHeight:9,padding:10,color:'#6b8799'}}},
+      scales:{r:{grid:{color:'#1e2a35'},pointLabels:{color:'#6b8799',font:{size:10}},
+                  ticks:{color:'#3d5566',backdropColor:'transparent'},min:0,max:1}}}
+  });
+
+  // Confusion matrices — native canvas heatmap (works without matrix plugin)
+  const cmGrid = document.getElementById('mc-cm-grid');
+  cmGrid.innerHTML='';
+  const classNames = _mcData.class_names ? Object.values(_mcData.class_names) : [];
+  const cmItems = [];
+  models.forEach(m=>{
+    if (!m.cm) return;
+    const card = document.createElement('div'); card.className='cm-card';
+    const canvas = document.createElement('canvas');
+    canvas.id='cm-'+m.model.replace(/\s+/g,'_');
+    card.innerHTML=`<div class="cm-title">${m.model}</div>`;
+    card.appendChild(canvas);
+    cmGrid.appendChild(card);
+    cmItems.push({canvas, cm:m.cm});
+  });
+  // Defer drawing until after layout so canvas.offsetWidth is correct
+  requestAnimationFrame(()=>{
+    cmItems.forEach(({canvas,cm})=>drawCmCanvas(canvas, cm, classNames));
+  });
+
+  // Report selector
+  const sel = document.getElementById('mc-report-select');
+  sel.innerHTML = models.filter(m=>m.report).map(m=>`<option value="${m.model}">${m.model}</option>`).join('');
+  renderReport();
+}
+
+function renderReport() {
+  const sel = document.getElementById('mc-report-select');
+  const modelName = sel.value;
+  if (!_mcData || !modelName) return;
+  const model = _mcData.models.find(m=>m.model===modelName);
+  if (!model || !model.report) return;
+  const classNames = _mcData.class_names ? _mcData.class_names : {};
+  const tbody = document.getElementById('mc-report-tbody');
+  const rows = [];
+  for (const [key, vals] of Object.entries(model.report)) {
+    if (typeof vals==='object' && vals!==null && 'precision' in vals) {
+      const cls = (!isNaN(key) && classNames[parseInt(key)]) ? classNames[parseInt(key)] : key;
+      rows.push(`<tr>
+        <td>${cls}</td>
+        <td>${(vals.precision||0).toFixed(4)}</td>
+        <td>${(vals.recall||0).toFixed(4)}</td>
+        <td>${(vals['f1-score']||0).toFixed(4)}</td>
+        <td>${(vals.support||0).toLocaleString()}</td>
+      </tr>`);
+    }
+  }
+  tbody.innerHTML = rows.join('');
+}
+
+// ── Native canvas confusion matrix heatmap ─────────────────────────────
+function drawCmCanvas(canvas, cm, classLabels) {
+  const n = cm.length;
+  const labels = classLabels.length >= n ? classLabels.slice(0,n) : cm.map((_,i)=>'C'+i);
+  const rowSums = cm.map(row=>row.reduce((a,b)=>a+b,0));
+  const norm = cm.map((row,i)=>row.map(v=>rowSums[i]>0?v/rowSums[i]:0));
+
+  const ctx2 = canvas.getContext('2d');
+  const W = canvas.offsetWidth||200, H=200;
+  canvas.width=W; canvas.height=H;
+  const pad={top:22,left:36,right:8,bottom:8};
+  const cw=(W-pad.left-pad.right)/n, ch=(H-pad.top-pad.bottom)/n;
+
+  ctx2.clearRect(0,0,W,H);
+  ctx2.font='9px IBM Plex Mono,monospace';
+
+  // Draw cells
+  for(let r=0;r<n;r++){
+    for(let c=0;c<n;c++){
+      const v=norm[r][c];
+      const x=pad.left+c*cw, y=pad.top+r*ch;
+      // Color: blue tint scaled by value
+      const alpha=Math.max(0.06, v);
+      ctx2.fillStyle=`rgba(0,212,255,${alpha.toFixed(2)})`;
+      ctx2.fillRect(x+1,y+1,cw-2,ch-2);
+      // Value text
+      ctx2.fillStyle=v>0.5?'#080c10':'#c8d6e0';
+      ctx2.textAlign='center'; ctx2.textBaseline='middle';
+      ctx2.fillText((v*100).toFixed(1)+'%', x+cw/2, y+ch/2);
+    }
+  }
+  // Column labels (predicted)
+  ctx2.fillStyle='#6b8799'; ctx2.textAlign='center'; ctx2.textBaseline='bottom';
+  labels.forEach((lbl,c)=>ctx2.fillText(lbl.slice(0,6), pad.left+c*cw+cw/2, pad.top-4));
+  // Row labels (true)
+  ctx2.textAlign='right'; ctx2.textBaseline='middle';
+  labels.forEach((lbl,r)=>ctx2.fillText(lbl.slice(0,6), pad.left-4, pad.top+r*ch+ch/2));
+}
+</script>
+</body>
+</html>
