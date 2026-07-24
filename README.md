@@ -123,6 +123,17 @@ machine-learning-based-ids/
 │   ├── README.md
 │   └── multi_attack_slidingWindow_v4.ipynb
 |
+├── modules/
+|   ├── config.py            # paths, labeling rules, class maps, feature list — edit this first
+|   ├── data_loading.py      # load/clean Wireshark CSVs, label, merge, downsample
+|   ├── features.py          # per-packet feature extraction + sliding-window aggregation
+|   ├── utils.py             # shared threshold/bias decision-rule helpers
+|   ├── eda.py               # optional plotting (raw traffic + feature EDA, leakage check)
+|   ├── train.py             # model zoo, evaluation, ensemble, bundle export — full pipeline entrypoint
+|   ├── predict.py           # run a saved bundle against a new capture — CLI entrypoint
+|   └── requirements.txt
+|
+|
 ├── sdn/
 │   ├── README.md
 │   └── topology/
